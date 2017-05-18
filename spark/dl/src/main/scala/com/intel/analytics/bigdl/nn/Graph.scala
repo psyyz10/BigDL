@@ -52,8 +52,8 @@ import scala.reflect.ClassTag
  * @tparam T Numeric type. Only support float/double now
  */
 @SerialVersionUID(- 2896121321564992779L)
-class Graph[T: ClassTag](inputs : Seq[ModuleNode[T]],
-  outputs : Seq[ModuleNode[T]])(implicit ev: TensorNumeric[T])
+class Graph[T: ClassTag](val inputs : Seq[ModuleNode[T]],
+  val outputs : Seq[ModuleNode[T]])(implicit ev: TensorNumeric[T])
   extends Container[Activity, Activity, T]{
 
   override def updateOutput(input: Activity): Activity = {

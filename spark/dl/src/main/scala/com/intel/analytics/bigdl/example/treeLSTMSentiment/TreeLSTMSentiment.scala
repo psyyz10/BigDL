@@ -22,7 +22,7 @@ import com.intel.analytics.bigdl.example.treeLSTMSentiment.TreeLSTMSentiment.Tre
 import com.intel.analytics.bigdl.example.utils._
 import com.intel.analytics.bigdl.example.utils.SimpleTokenizer._
 import com.intel.analytics.bigdl.optim.{Adagrad, Optimizer, Top1Accuracy, Trigger}
-import com.intel.analytics.bigdl.tensor.Tensor
+import com.intel.analytics.bigdl.tensor.{Storage, Tensor}
 import com.intel.analytics.bigdl.utils.{Engine, T}
 import org.apache.spark.SparkContext
 
@@ -129,7 +129,7 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
 
   }
 
-  def readTree(parents: Seq[Int]): Tensor[Float] = {
+  def readTree(parents: Array[Int]): Tensor[Float] = {
     val size = parents.length
     val maxNumChildren = parents
       .groupBy(x => x)
@@ -170,8 +170,6 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
   }
 
 
-
-
   def train(): Unit = {
     val conf = Engine.createSparkConf()
       .setAppName("Text classification")
@@ -183,45 +181,65 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
     val trainingSplit = param.trainingSplit
 
     val treeRDD = sc.textFile("", param.partitionNum)
-    val labelRDD = sc.textFile("", param.partitionNum)
-    val sentenceRDD = sc.textFile("", param.partitionNum)
-
-    treeRDD
-      .flatMap(line => line.split(" "))
+      .map(line => line.split(" "))
       .map(_.map(_.toInt))
       .map(readTree)
+    val labelRDD = sc.textFile("", param.partitionNum)
+      .map(line => line.split(" "))
+      .map(_.map(_.toFloat))
+    val sentenceRDD = sc.textFile("", param.partitionNum)
 
-    labelRDD
-      .flatMap(line => line.split(" "))
-      .map()
 
     // For large dataset, you might want to get such RDD[(String, Float)] from HDFS
     val dataRdd = sc.parallelize(loadRawData(), param.partitionNum)
     val (word2Meta, wordVecMap) = textClassifier.analyzeTexts(dataRdd)
-    val wordVecTensor = Tensor(wordVecMap.size, param.embeddingDim)
-    var (i, j) = (1, 1)
-    while (i <= wordVecMap.size) {
-      val vector = wordVecMap(i)
-      while (j <= param.embeddingDim) {
-        wordVecTensor.setValue(i, j, vector(j))
-        j += 1
+
+    val filename = s"$gloveDir/glove.840B.300d.txt"
+//    val gloveVocab = scala.collection.mutable.Map[String, Int]()
+    val word2Vec = scala.collection.mutable.Map[String, Array[Float]]()
+    for (line <- Source.fromFile(filename, "ISO-8859-1").getLines) {
+      val values = line.split(" ")
+      val word = values(0)
+      if (word2Meta.contains(word)) {
+        val coefs = values.slice(1, values.length).map(_.toFloat)
+        word2Vec.put(word, coefs)
       }
+    }
+
+    val word2VecTensor = Tensor(wordVecMap.size, param.embeddingDim)
+    val vocab = scala.collection.mutable.Map[String, Int]()
+    var i = 1
+    for (line <- Source.fromFile("vocab.cased.txt", "ISO-8859-1").getLines) {
+      if (word2Vec.contains(line)) {
+        word2VecTensor(i) = Tensor(Storage(word2Vec(line)))
+      } else {
+        word2VecTensor(i).uniform(-0.05f, 0.05f)
+      }
+      vocab += line -> i
       i += 1
     }
 
-    val
-    val word2MetaBC = sc.broadcast(word2Meta)
-    val word2VecBC = sc.broadcast(wordVecTensor)
-    val vectorizedRdd = dataRdd
-      .map {case (text, label) => (toTokens(text, word2MetaBC.value), label)}
-      .map {case (tokens, label) => (shaping(tokens, sequenceLen), label)}
-      .map {case (tokens, label) => (vectorization(
-        tokens, embeddingDim, word2VecBC.value), label)}
-    val sampleRDD = vectorizedRdd.map {case (input: Array[Array[Float]], label: Float) =>
+//    while (i <= wordVecMap.size) {
+//      val vector = wordVecMap(i)
+//      while (j <= param.embeddingDim) {
+//        wordVecTensor.setValue(i, j, vector(j))
+//      }
+//      i += 1
+//    }
+
+    val vocabBC = sc.broadcast(vocab)
+    val word2VecBC = sc.broadcast(word2VecTensor)
+    val vecSentence = sentenceRDD
+      .map(line => line.split(" "))
+      .map(line => line.map(vocabBC.value(_)))
+
+    val sampleRDD = vecSentence.zip(labelRDD).zip(treeRDD)
+      .map {case ((input: Array[Int], label: Array[Float]), tree: Tensor[Float]) =>
       Sample(
-        featureTensor = Tensor(input.flatten, Array(sequenceLen, embeddingDim))
-          .transpose(1, 2).contiguous(),
-        labelTensor = Tensor(Array(label), Array(1)))
+        featureTensor =
+          Tensor(input.flatten, Array(sequenceLen, embeddingDim)).transpose(1, 2).contiguous(),
+        labelTensor =
+          Tensor(label, Array(1)))
     }
 
     val Array(trainingRDD, valRDD) = sampleRDD.randomSplit(

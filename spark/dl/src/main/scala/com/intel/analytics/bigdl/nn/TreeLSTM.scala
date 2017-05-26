@@ -24,7 +24,7 @@ abstract class TreeLSTM[T](
   val inputSize: Int,
   val hiddenSize: Int = 150
 )(implicit ev: TensorNumeric[T])
-  extends AbstractModule[Table, Table, T] {
+  extends AbstractModule[Table, Tensor[T], T] {
   protected val memZero: Tensor[T] = Tensor[T](hiddenSize).zero()
 
   def shareParams(

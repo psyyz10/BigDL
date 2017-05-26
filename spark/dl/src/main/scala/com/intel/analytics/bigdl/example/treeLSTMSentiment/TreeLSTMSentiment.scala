@@ -108,9 +108,7 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
 
   val treeLSTM = BinaryTreeLSTM(
     inputSize = 10,
-    hiddenSize = param.hiddenSize,
-    outputModuleFun = createSentimentModule,
-    criterion = criterion
+    hiddenSize = param.hiddenSize
   )
 
   def createSentimentModule(): Module[Float] = {
@@ -191,8 +189,8 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
 
 
     // For large dataset, you might want to get such RDD[(String, Float)] from HDFS
-    val dataRdd = sc.parallelize(loadRawData(), param.partitionNum)
-    val (word2Meta, wordVecMap) = textClassifier.analyzeTexts(dataRdd)
+//    val dataRdd = sc.parallelize(loadRawData(), param.partitionNum)
+//    val (word2Meta, wordVecMap) = textClassifier.analyzeTexts(dataRdd)
 
     val filename = s"$gloveDir/glove.840B.300d.txt"
 //    val gloveVocab = scala.collection.mutable.Map[String, Int]()
@@ -200,13 +198,11 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
     for (line <- Source.fromFile(filename, "ISO-8859-1").getLines) {
       val values = line.split(" ")
       val word = values(0)
-      if (word2Meta.contains(word)) {
-        val coefs = values.slice(1, values.length).map(_.toFloat)
-        word2Vec.put(word, coefs)
-      }
+      val coefs = values.slice(1, values.length).map(_.toFloat)
+      word2Vec += word -> coefs
     }
 
-    val word2VecTensor = Tensor(wordVecMap.size, param.embeddingDim)
+    val word2VecTensor = Tensor(word2Vec.size, param.embeddingDim)
     val vocab = scala.collection.mutable.Map[String, Int]()
     var i = 1
     for (line <- Source.fromFile("vocab.cased.txt", "ISO-8859-1").getLines) {
@@ -234,7 +230,7 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
       .map(line => line.map(vocabBC.value(_)))
 
     val sampleRDD = vecSentence.zip(labelRDD).zip(treeRDD)
-      .map {case ((input: Array[Int], label: Array[Float]), tree: Tensor[Float]) =>
+      .map { case ((input: Array[Int], label: Array[Float]), tree: Tensor[Float]) =>
       Sample(
         featureTensor =
           Tensor(input.flatten, Array(sequenceLen, embeddingDim)).transpose(1, 2).contiguous(),
@@ -246,7 +242,7 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
       Array(trainingSplit, 1 - trainingSplit))
 
     val optimizer = Optimizer(
-      model = buildModel(wordVecMap.size),
+      model = buildModel(vocab.size),
       sampleRDD = trainingRDD,
       criterion = new ClassNLLCriterion[Float](),
       batchSize = param.batchSize
@@ -261,13 +257,15 @@ class TreeLSTMSentiment(param: TreeLSTMSentimentParam) extends Serializable{
     sc.stop()
   }
 
-  def buildModel(vocabSize: Int): Module[Float] = {
+  def buildModel(vocabSize: Int, word2VecTensor: Tensor[Float]): Module[Float] = {
+    val embedding = LookupTable(vocabSize, param.embeddingDim)
+    embedding.weight.set(word2VecTensor)
     Sequential()
       .add(ParallelTable()
-        .add(LookupTable(vocabSize, param.embeddingDim))
+        .add(embedding)
         .add(Identity()))
       .add(BinaryTreeLSTM(
-        param.embeddingDim, param.hiddenSize, createSentimentModule, ClassNLLCriterion()))
+        param.embeddingDim, param.hiddenSize))
   }
 
   def readSentence

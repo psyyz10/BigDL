@@ -28,17 +28,15 @@ import util.control.Breaks._
 class BinaryTreeLSTM[T](
   inputSize: Int,
   hiddenSize: Int,
-  outputModuleFun: () => Module[T] = null,
-  criterion: AbstractCriterion[Activity, Activity, T],
   gateOutput: Boolean = true
 )(implicit ev: TensorNumeric[T])
   extends TreeLSTM[T](inputSize, hiddenSize) {
+  val modules: ArrayBuffer[Module[T]] = ArrayBuffer[Module[T]]()
   val composers: ArrayBuffer[Module[T]] = ArrayBuffer[Module[T]]()
-  val outputModules: ArrayBuffer[Module[T]] = ArrayBuffer[Module[T]]()
   val leafModules: ArrayBuffer[Module[T]] = ArrayBuffer[Module[T]]()
-  val leafModule: Module[T] = createLeafModule()
   val composer: Module[T] = createComposer()
-  val outputModule: Module[T] = createOutputModule()
+  val leafModule: Module[T] = createLeafModule()
+//  val outputModule: Module[T] = createOutputModule()
   val cells = ArrayBuffer[Module[T]]()
 
   def createLeafModule(): Module[T] = {
@@ -96,97 +94,103 @@ class BinaryTreeLSTM[T](
     composer
   }
 
-  def createOutputModule(): Module[T] = {
-    if (outputModuleFun == null) return null
+//  def createOutputModule(): Module[T] = {
+//    if (outputModuleFun == null) return null
+//
+//    val outputModule = outputModuleFun()
+//    if (this.outputModule != null) {
+//      shareParams(outputModule, this.outputModule)
+//    }
+//
+//    outputModule
+//  }
 
-    val outputModule = outputModuleFun()
-    if (this.outputModule != null) {
-      shareParams(outputModule, this.outputModule)
-    }
-
-    outputModule
-  }
-
-  override def updateOutput(input: Table): Table = {
-    forward(input(1), input(2))
-  }
-
-
-  def forward(input: Tensor[T], treeNode: TreeNode): Table = {
-    var (lLoss, rLoss) = (ev.zero, ev.zero)
-    if (treeNode.children.length == 0) {
-      val numLeafModules = leafModules.size
-      if (numLeafModules == 0) {
-        treeNode.module = createLeafModule()
+  override def updateOutput(input: Table): Tensor[T] = {
+    val tensorTree = new TensorTree[T](input(2))
+    for (i <- tensorTree.size(1)) {
+      if (tensorTree.noChild(i)) {
+        val numLeafModules = leafModules.size
+        if (numLeafModules == 0) {
+          cells.append(createLeafModule())
+        } else {
+          cells.append(leafModules.remove(numLeafModules - 1))
+        }
       } else {
-        treeNode.module = leafModules.remove(numLeafModules - 1)
+        val numComposers = composers.size
+        if (numComposers == 0) {
+          cells.append(createComposer())
+        } else {
+          cells.append(composers.remove(numComposers - 1))
+        }
       }
-      treeNode.state = treeNode.module.forward(input.select(1, treeNode.leafIndex)).toTable
+    }
+    forward(input(1), tensorTree, tensorTree.getRoot())
+    output.resize(cells.size, hiddenSize)
+    for (i: Int <- cells.size) {
+      output.select(1, i).copy(unpackState(cells(i - 1).output.toTable)._2)
+    }
+    output
+  }
+
+
+  def forward(input: Tensor[T], tree: TensorTree[T], nodeIndex: Int): Table = {
+//    var (lLoss, rLoss) = (ev.zero, ev.zero)
+    if (tree.noChild(nodeIndex)) {
+      cells(nodeIndex - 1)
+        .forward(input.select(1, tree.leafIndex(nodeIndex))).toTable
     } else {
-      val numComposers = composers.size
-      if (numComposers == 0) {
-        treeNode.module = createComposer()
-      } else {
-        treeNode.module = composers.remove(numComposers - 1)
-      }
-      val leftOut = forward(input, treeNode.children(1))
-      val rigthOut = forward(input, treeNode.children(2))
-      val (lc, lh) = unpackState(leftOut(1))
-      val (rc, rh) = unpackState(rigthOut(1))
-      lLoss = leftOut(2)
-      rLoss = rigthOut(2)
+      val leftOut = forward(input, tree, ev.toType[Int](tree.children(nodeIndex)(0)))
+      val rigthOut = forward(input, tree, ev.toType[Int](tree.children(nodeIndex)(1)))
+      val (lc, lh) = unpackState(leftOut)
+      val (rc, rh) = unpackState(rigthOut)
+//      lLoss = leftOut(2)
+//      rLoss = rigthOut(2)
 
-      treeNode.state = composer.forward(T(lc, lh, rc, rh)).toTable
+      cells(nodeIndex - 1).forward(T(lc, lh, rc, rh)).toTable
     }
 
-    var loss: T = ev.zero
-    if (outputModuleFun != null) {
-      val numOutputModules = outputModules.size
-      if (numOutputModules == 0) {
-        treeNode.outputModule = createOutputModule()
-      } else {
-        treeNode.outputModule = outputModules.remove(numOutputModules - 1)
-      }
-      treeNode.output = treeNode.outputModule.forward(treeNode.state(2))
-      if (train) {
-        loss = criterion.forward(treeNode.output, treeNode.label)
-        loss = ev.plus(loss, ev.plus(lLoss, rLoss))
-      }
-    }
-
-    T(treeNode.state, loss)
+//    var loss: T = ev.zero
+//    if (outputModuleFun != null) {
+//      val numOutputModules = outputModules.size
+//      if (numOutputModules == 0) {
+//        treeNode.outputModule = createOutputModule()
+//      } else {
+//        treeNode.outputModule = outputModules.remove(numOutputModules - 1)
+//      }
+//      treeNode.output = treeNode.outputModule.forward(treeNode.state(2))
+//      if (train) {
+//        loss = criterion.forward(treeNode.output, treeNode.label)
+//        loss = ev.plus(loss, ev.plus(lLoss, rLoss))
+//      }
+//    }
   }
 
-  override def updateGradInput(input: Table, gradOutput: Table): Table = {
-    val treeNode: TreeNode = input(1)
-    val inputs: Tensor[T] = input(2)
-    backward(treeNode, inputs, gradOutput)
+  override def updateGradInput(input: Table, gradOutput: Tensor[T]): Table = {
+    val tensorTree = new TensorTree[T](input(2))
+    backward(input(1), tensorTree, gradOutput, tensorTree.getRoot())
     gradInput
   }
 
-  def backward(treeNode: TreeNode, inputs: Tensor[T], gradOutput: Table): Unit = {
+  def backward(
+    inputs: Tensor[T],
+    tree: TensorTree[T],
+    gradOutput: Tensor[T],
+    nodeIndex: Int
+  ): Unit = {
     var outputGrad = memZero
-    gradInput[Tensor[T]](2).resizeAs(inputs)
-    if (treeNode.output != null && treeNode.label != null) {
-      outputGrad = treeNode.outputModule.backward(
-        treeNode.state(2), criterion.backward(treeNode.output, treeNode.label)).toTensor
-    }
-    if (treeNode.outputModule != null) {
-      outputModules.append(treeNode.outputModule)
-      treeNode.outputModule = null
-    }
+    gradInput[Tensor[T]](1).resizeAs(inputs)
 
-    if (treeNode.children.length == 0) {
-      gradInput[Tensor[T]](2)
-        .select(1, treeNode.leafIndex)
+    if (tree.noChild(nodeIndex)) {
+      gradInput[Tensor[T]](1)
+        .select(1, tree.leafIndex(nodeIndex))
         .copy(
-          treeNode
-            .module
-            .backward(inputs(treeNode.leafIndex),
+          cells(nodeIndex - 1)
+            .backward(
+              inputs.select(1, tree.leafIndex(nodeIndex)),
               T(gradOutput(1), gradOutput[Tensor[T]](2) + outputGrad)).toTensor)
 
-      leafModules.append(treeNode.module)
-      treeNode.module = null
+      leafModules.append(cells(nodeIndex - 1))
+      cells(nodeIndex - 1) = null
     } else {
       val (lc, lh, rc, rh) = getChildStates(treeNode)
       val composerGrad =
@@ -241,11 +245,9 @@ object BinaryTreeLSTM {
   def apply[T](
     inputSize: Int,
     hiddenSize: Int,
-    outputModuleFun: () => Module[T] = null,
-    criterion: AbstractCriterion[Activity, Activity, T],
     gateOutput: Boolean = true
   )(implicit ev: TensorNumeric[T]): BinaryTreeLSTM[T] =
-    new BinaryTreeLSTM(inputSize, hiddenSize, outputModuleFun, criterion, gateOutput)
+    new BinaryTreeLSTM(inputSize, hiddenSize, gateOutput)
 }
 
 class TensorTree[T](val content: Tensor[T])
@@ -279,6 +281,10 @@ class TensorTree[T](val content: Tensor[T])
 
   def markAsLeaf(index: Int, leafIndex: Int): Unit = {
     content.setValue(index, size(2), ev.fromType(leafIndex))
+  }
+
+  def leafIndex(index: Int): Int = {
+    ev.toType[Int](content(Array(index, size(2))))
   }
 
   def hasChild(index: Int): Boolean = {

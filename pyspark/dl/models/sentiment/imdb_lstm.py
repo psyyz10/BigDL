@@ -25,18 +25,39 @@ from util.common import *
 import numpy as np
 import itertools
 
-sequence_len = 150  # cut texts after this number of words (among top max_features most common words)
+sequence_len = 150  # cut texts after this number of words (among top max_words most common words)
 padding_value = 1
 start_char = 2
 oov_char = 3
 index_from = 3
 
 # pad([1, 2, 3, 4, 5], 0, 6)
-def pad(l, fill_value, width):
-    if len(l) >= width:
-        return l[(len(l) - width):]
+def pad_sequence(x, fill_value, length):
+    """
+    Pads each sequence to the same length
+    :argument
+     x: a sequence
+     fill_value: pad the sequence with this value
+     length: pad seqthe length
+
+    """
+    if len(x) >= width:
+        return l[(len(x) - width):]
     else:
-        return [fill_value] * (width - len(l)) + l
+        return [fill_value] * (width - len(x)) + x
+
+def replaceOOV(x, oov_char, max_words):
+    """
+     :argument
+      x: a sequence
+      max_words: the max number of words to include
+      oov_char: words out of vocabulary because of exceeding the `max_words`
+        limit will be replaced with this character
+
+    :return
+     The replaced sequence
+    """
+    return [oov_char if w >= max_words else w for w in l]
 
 def to_sample(features, label):
     return Sample.from_ndarray(np.array(features, dtype='float'), np.array(label))
@@ -44,7 +65,7 @@ def to_sample(features, label):
 def build_model(w2v):
     model = Sequential()
 
-    embedding = LookupTable(max_features, embedding_dim)
+    embedding = LookupTable(max_words, embedding_dim)
     embedding.set_weights([w2v])
     print('lookupTable weight: ', embedding.get_weights())
     model.add(embedding)
@@ -66,10 +87,7 @@ def build_model(w2v):
             .add(Reshape([embedding_dim, 1, sequence_len]))\
             .add(SpatialConvolution(embedding_dim, 128, 3, 1))\
             .add(ReLU())\
-            .add(SpatialMaxPooling(5, 1, 5, 1))\
-            .add(Linear(128, 128))\
-            .add(Dropout(0.2))\
-            .add(ReLU())
+            .add(SpatialMaxPooling(5, 1, 5, 1))
     elif model_type.lower() == "cnn-lstm":
         model.add(Dropout(0.2)).add(Reshape([embedding_dim, 1, sequence_len])) \
             .add(SpatialConvolution(embedding_dim, 64, 3, 1)) \
@@ -79,15 +97,18 @@ def build_model(w2v):
                  .add(LSTM(64, 128, p))) \
             .add(Select(2, -1))
 
-    model.add(Linear(128, 1))
-    model.add(Sigmoid())
+    model.add(Linear(128, 100))\
+        .add(Dropout(0.2))\
+        .add(ReLU())\
+        .add(Linear(100, 1))\
+        .add(Sigmoid())
 
     return model
 
 
 def train(sc,
           batch_size,
-          sequence_len, max_words, embedding_dim, training_split):
+          sequence_len, max_words, embedding_dim):
     print('Processing text dataset')
     (x_train, y_train), (x_test, y_test) = imdb.load_imdb()
     print('training set length: ', len(x_train))
@@ -95,22 +116,20 @@ def train(sc,
     idx_word = {v:k for k,v in word_idx.items()}
     glove = news20.get_glove_w2v(dim=embedding_dim)
 
-    # def genRandomVec():
-    #     [np.random.uniform(-0.05, 0.05) for i in range(1, embedding_dim + 1)]
     w2v = [glove.get(idx_word.get(i - index_from), np.random.uniform(-0.05, 0.05, embedding_dim))
-           for _ in itertools.repeat(None, max_features)]
+           for i in xrange(1, max_words + 1)]
     w2v = np.array(list(itertools.chain(*np.array(w2v, dtype='float'))), dtype='float')\
-        .reshape([max_features, embedding_dim])
+        .reshape([max_words, embedding_dim])
 
     train_rdd = sc.parallelize(zip(x_train, y_train), 2) \
         .map(lambda (x, y): ([start_char] + [w + index_from for w in x] , y))\
-        .map(lambda (x, y): ([oov_char if w >= max_features else w for w in x], y))\
-        .map(lambda (x, y): (pad(x, padding_value, sequence_len), y))\
+        .map(lambda (x, y): ([oov_char if w >= max_words else w for w in x], y))\
+        .map(lambda (x, y): (pad_sequence(x, padding_value, sequence_len), y))\
         .map(lambda (x, y): to_sample(x, y))
     test_rdd = sc.parallelize(zip(x_test, y_test), 2) \
         .map(lambda (x, y): ([start_char] + [w + index_from for w in x], y))\
-        .map(lambda (x, y): ([oov_char if w >= max_features else w for w in x], y))\
-        .map(lambda (x, y): (pad(x, padding_value, sequence_len), y))\
+        .map(lambda (x, y): ([oov_char if w >= max_words else w for w in x], y))\
+        .map(lambda (x, y): (pad_sequence(x, padding_value, sequence_len), y))\
         .map(lambda (x, y): to_sample(x, y))
 
     optimizer = Optimizer(
@@ -135,6 +154,8 @@ if __name__ == "__main__":
     parser.add_option("-b", "--batchSize", dest="batchSize", default="128")
     parser.add_option("-e", "--embedding_dim", dest="embedding_dim", default="50")  # noqa
     parser.add_option("-m", "--max_epoch", dest="max_epoch", default="15")
+    parser.add_option("-s", "--sequence_len", dest="sequence_len", default="150")
+    parser.add_option("--max_words", dest="max_words", default="10000")
     parser.add_option("--model", dest="model_type", default="lstm")
     parser.add_option("-p", "--p", dest="p", default="0.0")
 
@@ -145,13 +166,13 @@ if __name__ == "__main__":
         max_epoch = int(options.max_epoch)
         p = float(options.p)
         model_type = options.model_type
-        sequence_len = 150
-        max_features = 10000
+        sequence_len = int(options.sequence_len)
+        max_words = int(options.max_words)
         sc = SparkContext(appName="text_classifier",
                           conf=create_spark_conf())
         init_engine()
         train(sc,
               batch_size,
-              sequence_len, max_words, embedding_dim, training_split)
+              sequence_len, max_words, embedding_dim)
     elif options.action == "test":
         pass

@@ -1535,6 +1535,7 @@ class LookupTable(Model):
     a convolution of width 1, commonly used for word embeddings
 
     >>> lookupTable = LookupTable(1, 1, 1e-5, 1e-5, 1e-5, True)
+    >>> lookupTable.setWeight(JTensor.from_ndarray([1,2]))
     creating: createLookupTable
     '''
 
@@ -1553,7 +1554,6 @@ class LookupTable(Model):
                                           max_norm,
                                           norm_type,
                                           should_scale_grad_by_freq)
-
 
 class MM(Model):
 

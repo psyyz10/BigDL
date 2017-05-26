@@ -61,7 +61,7 @@ class LookupTable[T: ClassTag]
 
   override def reset(): Unit = {
     // todo: stdv = stdv or 1
-    weight.apply1(_ => ev.fromType[Double](RNG.normal(0, 1)))
+    weight.apply1(_ => ev.fromType[Double](RNG.uniform(-0.05, 0.05)))
   }
 
   private def renorm(input : Tensor[T]): Unit = {

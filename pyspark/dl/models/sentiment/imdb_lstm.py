@@ -25,7 +25,6 @@ from util.common import *
 import numpy as np
 import itertools
 
-sequence_len = 150  # cut texts after this number of words (among top max_words most common words)
 padding_value = 1
 start_char = 2
 oov_char = 3
@@ -41,10 +40,10 @@ def pad_sequence(x, fill_value, length):
      length: pad seqthe length
 
     """
-    if len(x) >= width:
-        return l[(len(x) - width):]
+    if len(x) >= length:
+        return x[(len(x) - length):]
     else:
-        return [fill_value] * (width - len(x)) + x
+        return [fill_value] * (length - len(x)) + x
 
 def replaceOOV(x, oov_char, max_words):
     """
@@ -82,17 +81,21 @@ def build_model(w2v):
                   .add(LSTM(embedding_dim, 128, p)))\
             .add(Select(2, -1))
     elif model_type.lower() == "cnn":
-        model.add(Transpose(1, 0))\
+        model.add(Transpose([(2, 3)]))\
             .add(Dropout(0.2))\
             .add(Reshape([embedding_dim, 1, sequence_len]))\
-            .add(SpatialConvolution(embedding_dim, 128, 3, 1))\
+            .add(SpatialConvolution(embedding_dim, 128, 5, 1))\
             .add(ReLU())\
-            .add(SpatialMaxPooling(5, 1, 5, 1))
-    elif model_type.lower() == "cnn-lstm":
-        model.add(Dropout(0.2)).add(Reshape([embedding_dim, 1, sequence_len])) \
-            .add(SpatialConvolution(embedding_dim, 64, 3, 1)) \
+            .add(SpatialMaxPooling(sequence_len - 5 + 1, 1, 1, 1))\
+            .add(Reshape([128]))
+    elif model_type.lower() == "cnn_lstm":
+        model.add(Transpose([(2, 3)]))\
+            .add(Dropout(0.2))\
+            .add(Reshape([embedding_dim, 1, sequence_len])) \
+            .add(SpatialConvolution(embedding_dim, 64, 5, 1)) \
             .add(ReLU()) \
-            .add(SpatialMaxPooling(5, 1, 5, 1)) \
+            .add(SpatialMaxPooling(sequence_len - 5 + 1, 1, 1, 1)) \
+            .add(Reshape([64])) \
             .add(Recurrent()
                  .add(LSTM(64, 128, p))) \
             .add(Select(2, -1))
@@ -140,6 +143,7 @@ def train(sc,
         batch_size=batch_size,
         optim_method=Adam())
 
+    print("modelmodel: ", sequence_len, " ", batch_size, " ", embedding_dim)
     optimizer.set_validation(
         batch_size=batch_size,
         val_rdd=test_rdd,
@@ -151,17 +155,17 @@ def train(sc,
 if __name__ == "__main__":
     parser = OptionParser()
     parser.add_option("-a", "--action", dest="action", default="train")
-    parser.add_option("-b", "--batchSize", dest="batchSize", default="128")
+    parser.add_option("-b", "--batch_size", dest="batch_size", default="128")
     parser.add_option("-e", "--embedding_dim", dest="embedding_dim", default="50")  # noqa
     parser.add_option("-m", "--max_epoch", dest="max_epoch", default="15")
-    parser.add_option("-s", "--sequence_len", dest="sequence_len", default="150")
+    parser.add_option("-s", "--sequence_len", dest="sequence_len", default="500")
     parser.add_option("--max_words", dest="max_words", default="10000")
     parser.add_option("--model", dest="model_type", default="lstm")
     parser.add_option("-p", "--p", dest="p", default="0.0")
 
     (options, args) = parser.parse_args(sys.argv)
     if options.action == "train":
-        batch_size = int(options.batchSize)
+        batch_size = int(options.batch_size)
         embedding_dim = int(options.embedding_dim)
         max_epoch = int(options.max_epoch)
         p = float(options.p)

@@ -34,31 +34,37 @@ index_from = 3
 def pad_sequence(x, fill_value, length):
     """
     Pads each sequence to the same length
-    :argument
-     x: a sequence
-     fill_value: pad the sequence with this value
-     length: pad seqthe length
+    :param x: a sequence
+    :param fill_value: pad the sequence with this value
+    :param length: pad sequence to the length
 
+    :return: the padded sequence
     """
     if len(x) >= length:
         return x[(len(x) - length):]
     else:
         return [fill_value] * (length - len(x)) + x
 
-def replaceOOV(x, oov_char, max_words):
+def replace_oov(x, oov_char, max_words):
     """
-     :argument
-      x: a sequence
-      max_words: the max number of words to include
-      oov_char: words out of vocabulary because of exceeding the `max_words`
-        limit will be replaced with this character
+    Replace the words out of vocabulary with `oov_char`
+    :param x: a sequence
+    :param max_words: the max number of words to include
+    :param oov_char: words out of vocabulary because of exceeding the `max_words`
+        limit will be replaced by this character
 
-    :return
-     The replaced sequence
+    :return: The replaced sequence
     """
-    return [oov_char if w >= max_words else w for w in l]
+    return [oov_char if w >= max_words else w for w in x]
 
 def to_sample(features, label):
+    """
+    Wrap the `features` and `label` to a training sample object
+    :param features: features of a sample
+    :param label: label of a sample
+
+    :return: a sample object including features and label
+    """
     return Sample.from_ndarray(np.array(features, dtype='float'), np.array(label))
 
 def build_model(w2v):
@@ -68,15 +74,15 @@ def build_model(w2v):
     embedding.set_weights([w2v])
     print('lookupTable weight: ', embedding.get_weights())
     model.add(embedding)
-    if model_type.lower() == "lstm":
+    if model_type.lower() == "gru":
+        model.add(Recurrent()
+                  .add(GRU(embedding_dim, 128, p))) \
+            .add(Select(2, -1))
+    elif model_type.lower() == "lstm":
         model.add(Recurrent()
                   .add(LSTM(embedding_dim, 128, p)))\
             .add(Select(2, -1))
-    elif model_type.lower() == "gru":
-        model.add(Recurrent()
-                  .add(GRU(embedding_dim, 128, p)))\
-            .add(Select(2, -1))
-    elif model_type.lower() == "bi-lstm":
+    elif model_type.lower() == "bi_lstm":
         model.add(BiRecurrent(CAddTable())
                   .add(LSTM(embedding_dim, 128, p)))\
             .add(Select(2, -1))
@@ -94,8 +100,9 @@ def build_model(w2v):
             .add(Reshape([embedding_dim, 1, sequence_len])) \
             .add(SpatialConvolution(embedding_dim, 64, 5, 1)) \
             .add(ReLU()) \
-            .add(SpatialMaxPooling(sequence_len - 5 + 1, 1, 1, 1)) \
-            .add(Reshape([64])) \
+            .add(SpatialMaxPooling(4, 1, 1, 1)) \
+            .add(Squeeze(3)) \
+            .add(Transpose([(2, 3)])) \
             .add(Recurrent()
                  .add(LSTM(64, 128, p))) \
             .add(Select(2, -1))
@@ -114,26 +121,29 @@ def train(sc,
           sequence_len, max_words, embedding_dim):
     print('Processing text dataset')
     (x_train, y_train), (x_test, y_test) = imdb.load_imdb()
+    print('finished processing text')
     print('training set length: ', len(x_train))
+    print('testing set length: ', len(x_test))
     word_idx = imdb.get_word_index()
     idx_word = {v:k for k,v in word_idx.items()}
-    glove = news20.get_glove_w2v(dim=embedding_dim)
 
-    w2v = [glove.get(idx_word.get(i - index_from), np.random.uniform(-0.05, 0.05, embedding_dim))
-           for i in xrange(1, max_words + 1)]
-    w2v = np.array(list(itertools.chain(*np.array(w2v, dtype='float'))), dtype='float')\
-        .reshape([max_words, embedding_dim])
 
     train_rdd = sc.parallelize(zip(x_train, y_train), 2) \
         .map(lambda (x, y): ([start_char] + [w + index_from for w in x] , y))\
-        .map(lambda (x, y): ([oov_char if w >= max_words else w for w in x], y))\
+        .map(lambda (x, y): (replace_oov(x, oov_char, max_words), y))\
         .map(lambda (x, y): (pad_sequence(x, padding_value, sequence_len), y))\
         .map(lambda (x, y): to_sample(x, y))
     test_rdd = sc.parallelize(zip(x_test, y_test), 2) \
         .map(lambda (x, y): ([start_char] + [w + index_from for w in x], y))\
-        .map(lambda (x, y): ([oov_char if w >= max_words else w for w in x], y))\
+        .map(lambda (x, y): (replace_oov(x, oov_char, max_words), y))\
         .map(lambda (x, y): (pad_sequence(x, padding_value, sequence_len), y))\
         .map(lambda (x, y): to_sample(x, y))
+
+    glove = news20.get_glove_w2v(source_dir='/tmp/.bigdl/dataset', dim=embedding_dim)
+    w2v = [glove.get(idx_word.get(i - index_from), np.random.uniform(-0.05, 0.05, embedding_dim))
+           for i in xrange(1, max_words + 1)]
+    w2v = np.array(list(itertools.chain(*np.array(w2v, dtype='float'))), dtype='float') \
+        .reshape([max_words, embedding_dim])
 
     optimizer = Optimizer(
         model=build_model(w2v),

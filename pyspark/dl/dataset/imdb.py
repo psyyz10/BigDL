@@ -21,11 +21,29 @@ import json
 IMDB_URL = 'https://s3.amazonaws.com/text-datasets/imdb.npz'
 
 def download_imdb(dest_dir):
+    """Download pre-processed IMDB movie review data
+
+    :argument
+        dest_dir: destination directory to store the data
+
+    :return
+        The absolute path of the stored data
+    """
     file_name = "imdb.npz"
-    file_abs_path = base.maybe_download(file_name, dest_dir, IMDB_URL)
+    file_abs_path = base.maybe_download(file_name,
+                                        dest_dir,
+                                        'https://s3.amazonaws.com/text-datasets/imdb.npz')
     return file_abs_path
 
-def load_imdb(dest_dir='/tmp/imdb'):
+def load_imdb(dest_dir='/tmp/.bigdl/dataset'):
+    """Load IMDB dataset.
+
+    :argument
+        dest_dir: where to cache the data (relative to `~/.bigdl/dataset`).
+
+    :return
+        the train, test separated IMDB dataset.
+    """
     path = download_imdb(dest_dir)
     f = np.load(path)
     x_train = f['x_train']
@@ -36,13 +54,13 @@ def load_imdb(dest_dir='/tmp/imdb'):
 
     return (x_train, y_train), (x_test, y_test)
 
-def get_word_index(dest_dir='~/.bigdl/dataset', ):
+def get_word_index(dest_dir='/tmp/.bigdl/dataset', ):
     """Retrieves the dictionary mapping word indices back to words.
 
-    # Arguments
+    :argument
         path: where to cache the data (relative to `~/.bigdl/dataset`).
 
-    # Returns
+    :return
         The word index dictionary.
     """
     file_name = "imdb_word_index.json"

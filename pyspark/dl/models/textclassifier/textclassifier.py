@@ -105,7 +105,6 @@ def train(sc,
           sequence_len, max_words, embedding_dim, training_split):
     print('Processing text dataset')
     texts = news20.get_news20()
-    print('text length ', len(texts))
     data_rdd = sc.parallelize(texts, 2)
 
     word_to_ic = analyze_texts(data_rdd)

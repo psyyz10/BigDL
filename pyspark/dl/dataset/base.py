@@ -178,7 +178,6 @@ def maybe_download(filename, work_directory, source_url):
     filepath = os.path.join(work_directory, filename)
 
     if not os.path.exists(filepath):
-        print (filepath)
         print('Downloading data from', source_url)
         global progbar
         progbar = None

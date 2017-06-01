@@ -1555,6 +1555,7 @@ class LookupTable(Model):
                                           norm_type,
                                           should_scale_grad_by_freq)
 
+
 class MM(Model):
 
     '''

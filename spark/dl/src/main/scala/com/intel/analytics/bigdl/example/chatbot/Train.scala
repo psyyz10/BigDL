@@ -263,11 +263,11 @@ object Train {
             .map(chatToLabeledChat(dictionary, _)).apply(0)
 
           val sent1 = Tensor(Storage(labeledChat._1), 1, Array(1, labeledChat._1.length))
-          var sent2 = Tensor(Storage(labeledChat._2), 1, Array(1, labeledChat._2.length))
+          val sent2 = Tensor(Storage(labeledChat._2), 1, Array(1, labeledChat._2.length))
           val timeDim = 2
           val featDim = 3
           val concat = Tensor[Float]()
-          var curInput = sent2
+          val curInput = sent2
           val end = dictionary.getIndex(SentenceToken.end) + 1
           var break = false
 

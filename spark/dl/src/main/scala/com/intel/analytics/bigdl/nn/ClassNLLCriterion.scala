@@ -16,7 +16,8 @@
 
 package com.intel.analytics.bigdl.nn
 
-import com.intel.analytics.bigdl.nn.abstractnn.TensorCriterion
+import com.intel.analytics.bigdl.nn.abstractnn.SizeAverageStatus.SizeAverageStatus
+import com.intel.analytics.bigdl.nn.abstractnn.{SizeAverageStatus, TensorCriterion}
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric
 import com.intel.analytics.bigdl.tensor.Tensor
 
@@ -24,23 +25,26 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 import scala.reflect.ClassTag
 import com.intel.analytics.bigdl.utils.Engine
+import org.apache.hadoop.mapreduce.v2.app.speculate.TaskRuntimeEstimator
 
 /**
  * The negative log likelihood criterion. It is useful to train a classification problem with n
  * classes. If provided, the optional argument weights should be a 1D Tensor assigning weight to
  * each of the classes. This is particularly useful when you have an unbalanced training set.
  *
- * The input given through a forward() is expected to contain log-probabilities of each class:
- * input has to be a 1D Tensor of size n. Obtaining log-probabilities in a neural network is easily
- * achieved by adding a LogSoftMax layer in the last layer of your neural network. You may use
- * CrossEntropyCriterion instead, if you prefer not to add an extra layer to your network. This
- * criterion expects a class index (1 to the number of class) as target when calling
- * forward(input, target) and backward(input, target).
+ * The input given through a forward() is expected to contain log-probabilities/probabilities of
+ * each class: input has to be a 1D Tensor of size n. Obtaining log-probabilities/probabilities
+ * in a neural network is easily achieved by adding a LogSoftMax/SoftMax layer in the last layer
+ * of your neural network. You may use CrossEntropyCriterion instead, if you prefer not to add
+ * an extra layer to your network. This criterion expects a class index (1 to the number of class)
+ * as target when calling forward(input, target) and backward(input, target).
  *
+ * In the log-probabilities case,
  * The loss can be described as:
  *     loss(x, class) = -x[class]
  * or in the case of the weights argument it is specified as follows:
  *     loss(x, class) = -weights[class] * x[class]
+ *
  * Due to the behaviour of the backend code, it is necessary to set sizeAverage to false when
  * calculating losses in non-batch mode.
  *
@@ -50,6 +54,9 @@ import com.intel.analytics.bigdl.utils.Engine
  *
  * By default, the losses are averaged over observations for each minibatch. However, if the field
  * sizeAverage is set to false, the losses are instead summed for each minibatch.
+ *
+ * In particular, when weights=None, size_average=True and logProbAsInput=False, this is same as
+ * `sparse_categorical_crossentropy` loss in keras.
  *
  * @param weights weights of each element of the input
  * @param sizeAverage size average of batch
@@ -69,8 +76,12 @@ class ClassNLLCriterion[@specialized(Float, Double) T: ClassTag]
   private var results: Array[Future[(T, T)]] = null
   @transient
   private var resultsBackward: Array[Future[_]] = null
-  var sparseOutput: Tensor[T] = Tensor()
-  var sparseGradInput: Tensor[T] = Tensor()
+
+  private val epsilon: T = ev.fromType(1e-8)
+
+  private val oneMinusEpsilon: T = ev.minus(ev.one, epsilon)
+
+  sizeAverageStatus = if (sizeAverage) SizeAverageStatus.True else SizeAverageStatus.False
 
   override def updateOutput(input: Tensor[T], target: Tensor[T]): T = {
     require(input.dim() == 1 || input.dim() == 2,
@@ -88,7 +99,6 @@ class ClassNLLCriterion[@specialized(Float, Double) T: ClassTag]
       total_weight = if (weights != null) weights(Array(curTarget)) else ev.fromType[Int](1)
       output = if (curTarget == paddingValue) ev.zero
       else ev.times(ev.negative(input.valueAt(curTarget)), total_weight)
-      sparseOutput.setValue(output)
     } else if (input.dim() == 2) {
       val batchSize = input.size(1)
       val targetSize = target.size()
@@ -111,7 +121,7 @@ class ClassNLLCriterion[@specialized(Float, Double) T: ClassTag]
           val curTarget = ev.toType[Int](target.valueAt(_i))
           assert(curTarget >= 1 && curTarget <= nClasses || curTarget == paddingValue,
             s"curTarget ${curTarget} is out of range 1 to ${nClasses}")
-          if (curTarget == paddingValue) (ev.zero, ev.one)
+          if (curTarget == paddingValue) (ev.zero, ev.zero)
           else {
             val curWeight = if (weights != null) weights.valueAt(curTarget) else ev.fromType[Int](1)
             (ev.times(input.valueAt(_i, curTarget), curWeight), curWeight)
@@ -119,14 +129,12 @@ class ClassNLLCriterion[@specialized(Float, Double) T: ClassTag]
         })
         i += 1
       }
-      sparseOutput.resizeAs(target)
 
       i = 0
       while (i < batchSize) {
         val (o, w) = Await.result(results(i), Duration.Inf)
         output = ev.minus(output, o)
         total_weight = ev.plus(total_weight, w)
-        sparseOutput.setValue(i + 1, ev.negative(o))
         i += 1
       }
       target.resize(targetSize)
@@ -142,7 +150,7 @@ class ClassNLLCriterion[@specialized(Float, Double) T: ClassTag]
       "ClassNLLCriterion: " +
         ErrorInfo.constrainInputAsVectorOrBatch +
         s"input dim ${input.dim()}")
-    assert(ev.toType[Double](total_weight) > 0.0, "total weight must larger than 0")
+
     gradInput.resizeAs(input)
     gradInput.zero()
 

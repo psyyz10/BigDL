@@ -283,7 +283,7 @@ object Train {
         sampleRDD = trainSet,
         criterion = TimeDistributedMaskCriterion(
           ClassNLLCriterion(paddingValue = padId, sizeAverage = false),
-          padValue = padId
+          paddingValue = padId
         ),
         batchSize = param.batchSize,
         featurePaddingParam = PaddingParam[Float](

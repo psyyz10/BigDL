@@ -40,6 +40,8 @@ import scala.reflect.ClassTag
  * @tparam T The numeric type in the criterion, usually which are [[Float]] or [[Double]]
  * @param wRegularizer: instance of [[Regularizer]]
  *                    (eg. L1 or L2 regularization), applied to the input weights matrices.
+ * @param maskZero: if maskZero is set to true, the input whose value equals `paddingValue`
+ *                the output will be masked to zero vector.
  */
 @SerialVersionUID( - 4832171200145114633L)
 class LookupTable[T: ClassTag]
@@ -261,16 +263,8 @@ class LookupTable[T: ClassTag]
     }
   }
 
-  override def zeroGradParameters(): Unit = {
-    gradWeight.zero()
-  }
-
   override def parameters(): (Array[Tensor[T]], Array[Tensor[T]]) = {
     (Array(this.weight), Array(this.gradWeight))
-  }
-
-  override def getParametersTable(): Table = {
-    T(getName() -> T("weight" -> weight, "gradWeight" -> gradWeight))
   }
 
   override def clearState() : this.type = {

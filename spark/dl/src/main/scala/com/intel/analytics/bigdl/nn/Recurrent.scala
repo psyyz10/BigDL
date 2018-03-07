@@ -33,6 +33,15 @@ import scala.reflect.ClassTag
 /**
  * [[Recurrent]] module is a container of rnn cells
  * Different types of rnn cells can be added using add() function
+ *
+ * The recurrent includes some mask mechanisms
+ * if the `maskZero` variable is set to true, the `Recurrent` module will
+ * not consider zero vector inputs. For each time step input, if a certain row is
+ * a zero vector (all the elements of the vector equals zero), then output of certain row
+ * of this time step would be a zero vector, and the hidden state of the certain row of
+ * this time step would be the same as the corresponding row of the hidden state of the
+ * previous step.
+ *
  */
 class Recurrent[T : ClassTag](
   var batchNormParams: BatchNormParams[T] = null,
@@ -62,11 +71,11 @@ class Recurrent[T : ClassTag](
   private val timeBuffer =
     new ArrayBuffer[(AbstractModule[_ <: Activity, _ <: Activity, T], Long, Long)]
   private var layer: TensorModule[T] = null
-  private var maskBuffer: Tensor[T] = _
-  private var gradOutputBuff: Table = _
-  private var indexBuffer: Tensor[T] = _
-  private var inputBuffer: Tensor[T] = _
-  private var outputBuffers: ArrayBuffer[Tensor[T]] = _
+  private var maskBuffer: Tensor[T] = Tensor()
+  private var gradOutputBuff: Table = T()
+  private var indexBuffer: Tensor[T] = Tensor()
+  private var inputBuffer: Tensor[T] = Tensor()
+  private var outputBuffers: ArrayBuffer[Tensor[T]] = ArrayBuffer(Tensor())
   private var minLength: Int = 0
 
   /**
@@ -156,26 +165,6 @@ class Recurrent[T : ClassTag](
     } else {
       cells.head.hidResize(hidden = hidden, batchSize = batchSize, stepShape)
       gradHidden = hidden
-    }
-
-    if (maskBuffer == null) {
-      maskBuffer = Tensor()
-    }
-
-    if (gradOutputBuff == null) {
-      gradOutputBuff = T()
-    }
-
-    if (indexBuffer == null) {
-      indexBuffer = Tensor()
-    }
-
-    if (inputBuffer == null) {
-      inputBuffer = Tensor()
-    }
-
-    if (outputBuffers == null) {
-      outputBuffers = ArrayBuffer(Tensor())
     }
   }
 
@@ -300,6 +289,8 @@ class Recurrent[T : ClassTag](
     initHidden(outputSize.drop(2))
     cloneCells()
     if (maskZero) {
+      require(input.dim == 3,
+        "If maskZero set to true, input should be a 3D Tensor, e.g [batch, times, nDim]")
       inputBuffer.resizeAs(input).abs(input).max(maskBuffer, indexBuffer, 3)
       minLength = ev.toType[Int](maskBuffer.sign().sum(2).min(1)._1(Array(1, 1, 1)))
     }
@@ -314,6 +305,9 @@ class Recurrent[T : ClassTag](
       if (maskZero && i > minLength) {
         val curMask = maskBuffer.select(2, i)
         val curOut = curOutput[Table](hidDim)[Tensor[T]](1)
+        // Copy output to a new new tensor as output, because for some cells
+        // such as LSTM the hidden h and ouput o refer to the same tensor.
+        // But in this case, we want h and o have difference values.
         curOutput.update(inputDim, outputBuffers(i - 1).resizeAs(curOut).copy(curOut))
         for (b <- 1 to curMask.size(1)) {
           if (curMask(Array(b, 1)) == ev.zero) {
@@ -492,7 +486,7 @@ class Recurrent[T : ClassTag](
 
     while (i >= 1) {
       currentGradOutput(hidDim) = if (i != times) cells(i).gradInput.toTable(hidDim)
-      else if (initGradHiddenState == null) gradHidden else initGradHiddenState
+        else if (initGradHiddenState == null) gradHidden else initGradHiddenState
       currentGradOutput(inputDim) = Recurrent.selectCopy(gradOutput, i, stepGradBuffer)
 
       _input(hidDim) = if (i > 1) cells(i - 2).output.toTable(hidDim)
@@ -634,11 +628,11 @@ class Recurrent[T : ClassTag](
     initGradHiddenState = null
     stepInput2CellBuf.set()
     stepGradBuffer.set()
-    maskBuffer = null
-    gradOutputBuff = null
-    inputBuffer = null
-    indexBuffer = null
-    outputBuffers = null
+    maskBuffer.set()
+    gradOutputBuff.clear()
+    inputBuffer.set()
+    indexBuffer.set()
+    outputBuffers.clear()
     minLength = 0
     this
   }
@@ -653,6 +647,7 @@ class Recurrent[T : ClassTag](
 
     modules.foreach(_.reset())
     cells.clear()
+    hidden = null
   }
 
   lazy val containMultiRNNCell: Boolean = topology.isInstanceOf[MultiRNNCell[T]]

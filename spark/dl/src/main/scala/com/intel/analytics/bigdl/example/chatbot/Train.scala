@@ -161,19 +161,24 @@ object Train {
             Recurrent(maskZero = true).add(LSTM(param.embedDim, param.embedDim))
           )
 
+
+        val stdv = 1.0 / math.sqrt(param.embedDim)
+        val wInit: InitializationMethod = RandomUniform(-stdv, stdv)
+        val bInit: InitializationMethod = RandomUniform(-stdv, stdv)
+
         val enclookuptable = LookupTable(
           vocabSize,
           param.embedDim,
           paddingValue = padId,
           maskZero = true
-        )
+        ).setInitMethod(wInit, bInit)
 
         val declookuptable = LookupTable(
           vocabSize,
           param.embedDim,
           paddingValue = padId,
           maskZero = true
-        )
+        ).setInitMethod(wInit, bInit)
 
       declookuptable.weight = enclookuptable.weight
       declookuptable.gradWeight = enclookuptable.gradWeight

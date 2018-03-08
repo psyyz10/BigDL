@@ -102,7 +102,6 @@ class TimeDistributed[T : ClassTag] (
      * combine: [B, T, D] => [B * T, D]
      * split:   [B * T, D] => [B, T, D]
      */
-
     val _inputSize = input.size
     combine(_inputSize, inputSize)
     input.resize(inputSize)
@@ -190,6 +189,16 @@ class TimeDistributed[T : ClassTag] (
     gradInput
   }
 
+  /**
+   * If the module has parameters, this will zero the accumulation of the gradients with respect
+   * to these parameters. Otherwise, it does nothing.
+   */
+  override def zeroGradParameters(): Unit = {
+    layer.zeroGradParameters()
+  }
+
+  override def updateParameters(learningRate: T): Unit = layer.updateParameters(learningRate)
+
   override def reset(): Unit = layer.reset()
 
   override def training(): TimeDistributed.this.type = {
@@ -240,10 +249,33 @@ class TimeDistributed[T : ClassTag] (
   override def parameters(): (Array[Tensor[T]], Array[Tensor[T]]) = layer.parameters()
 
   /**
+   * This method compact all parameters and gradients of the model into two tensors. So it's easier
+   * to use optim method
+   *
+   * @return
+   */
+  override def getParameters(): (Tensor[T], Tensor[T]) = layer.getParameters()
+
+  /**
    * This method will return a table indicating the name and corresponding parameters.
    * @return Table
    */
   override def getParametersTable(): Table = layer.getParametersTable()
+
+  /**
+   * Copy the useful running status from src to this.
+   *
+   * The subclass should override this method if it has some parameters besides weight and bias.
+   * Such as runningMean and runningVar of BatchNormalization.
+   *
+   * @param src source Module
+   * @return this
+   */
+  override def copyStatus(src: Module[T]): TimeDistributed.this.type = {
+    val other = src.asInstanceOf[TimeDistributed[T]]
+    layer.copyStatus(other.layer.asInstanceOf[Module[T]])
+    this
+  }
 
   override def clearState(): TimeDistributed.this.type = {
     super.clearState()
